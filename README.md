@@ -126,16 +126,3 @@ pytest.ini
 .github/workflows/ci.yml
 ```
 
-## What's intentionally stubbed for the hackathon build
-
-- **Storage**: evidence PDFs/JSON are written to local disk and served
-  from `/evidence-files/...`. `app/services/evidence.py`'s `_save_file`
-  is the one function to replace with a Cloudinary/S3 upload
-  (GROUND_RULES §3.2) — every caller only depends on the returned URL
-  string.
-- **State**: the graph, job store, and case registry are process-local
-  Python objects, not Neo4j/Redis/Mongo. This is deliberate — it makes
-  the service runnable and testable with zero infrastructure, and every
-  piece of state lives behind a narrow interface (`GraphStore`,
-  `JobStore`, `CaseRegistry`) so swapping the backing store later
-  doesn't touch route or business logic.
