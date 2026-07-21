@@ -1,0 +1,166 @@
+"""
+Evidence package generation.
+
+GROUND_RULES.md section 10.3 sketches a ReportLab skeleton for the PDF.
+This fills that in: Case Summary, Transcript, Entities, Network Summary,
+Timeline, Legal Disclaimer — the section list named in the skeleton's
+comment — and also emits the paired JSON package referenced by
+`evidence_package.json_url` in the /fuse contract.
+
+Storage: writes to `Settings.EVIDENCE_STORAGE_DIR` and returns a URL
+under `Settings.PUBLIC_BASE_URL`. Swap `_save_file` for a Cloudinary/S3
+upload (GROUND_RULES 3.2) when this moves off local disk — every caller
+only depends on the returned URL string, not the storage mechanism.
+"""
+import json
+import os
+from datetime import datetime, timezone
+from io import BytesIO
+
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.lib import colors
+
+from app.core.config import Settings
+
+
+def _save_file(settings: Settings, case_id: str, suffix: str, content: bytes) -> str:
+    os.makedirs(settings.EVIDENCE_STORAGE_DIR, exist_ok=True)
+    filename = f"evidence_{case_id}.{suffix}"
+    path = os.path.join(settings.EVIDENCE_STORAGE_DIR, filename)
+    with open(path, "wb") as f:
+        f.write(content)
+    return f"{settings.PUBLIC_BASE_URL}/evidence-files/{filename}"
+
+
+def build_timeline(case_id: str, raw_inputs: dict, created_at: str) -> list[dict]:
+    timeline = [{"timestamp": created_at, "event": f"Case {case_id} reported."}]
+    scam = raw_inputs.get("scam_result") or {}
+    if scam.get("transcript"):
+        timeline.append({"timestamp": created_at, "event": "Communication transcribed and analyzed."})
+    if scam.get("scam_type"):
+        timeline.append({"timestamp": created_at, "event": f"Classified as {scam['scam_type']}."})
+    vision = raw_inputs.get("vision_result") or {}
+    if vision:
+        timeline.append({"timestamp": created_at, "event": "Visual/document evidence analyzed."})
+    timeline.append({"timestamp": datetime.now(timezone.utc).isoformat(), "event": "Evidence package generated."})
+    return timeline
+
+
+def _pdf_bytes(case_id: str, fuse_result: dict, raw_inputs: dict, timeline: list[dict]) -> bytes:
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4)
+    styles = getSampleStyleSheet()
+    story = []
+
+    story.append(Paragraph(f"Evidence Package — Case {case_id}", styles["Title"]))
+    story.append(Paragraph(f"Generated: {datetime.now(timezone.utc).isoformat()}Z", styles["Normal"]))
+    story.append(Paragraph("CONFIDENTIAL — FOR LAW ENFORCEMENT USE ONLY", styles["Heading2"]))
+    story.append(Spacer(1, 12))
+
+    # Case Summary
+    story.append(Paragraph("Case Summary", styles["Heading2"]))
+    summary_rows = [
+        ["Risk level", fuse_result["risk_level"]],
+        ["Overall score", f"{fuse_result['overall_score']:.2f}"],
+        ["Pattern", fuse_result["network_analysis"]["pattern"]],
+        ["Linked cases", str(len(fuse_result["linked_cases"]))],
+    ]
+    table = Table(summary_rows, colWidths=[150, 300])
+    table.setStyle(TableStyle([
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+        ("BACKGROUND", (0, 0), (0, -1), colors.whitesmoke),
+    ]))
+    story.append(table)
+    story.append(Spacer(1, 12))
+
+    # Transcript
+    scam = raw_inputs.get("scam_result") or {}
+    if scam.get("transcript"):
+        story.append(Paragraph("Transcript", styles["Heading2"]))
+        story.append(Paragraph(scam["transcript"], styles["Normal"]))
+        story.append(Spacer(1, 12))
+
+    # Entities
+    entities = scam.get("entities") or []
+    if entities:
+        story.append(Paragraph("Extracted Entities", styles["Heading2"]))
+        rows = [["Type", "Value"]] + [[e.get("type", ""), str(e.get("value", ""))] for e in entities]
+        etable = Table(rows, colWidths=[150, 300])
+        etable.setStyle(TableStyle([
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+            ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
+        ]))
+        story.append(etable)
+        story.append(Spacer(1, 12))
+
+    # Network / linked cases
+    story.append(Paragraph("Fraud Network Summary", styles["Heading2"]))
+    na = fuse_result["network_analysis"]
+    story.append(Paragraph(
+        f"Cluster: {na.get('cluster_id') or 'n/a'} | Size: {na['size']} | "
+        f"Central entities: {', '.join(na['central_entities']) or 'none'} | "
+        f"Jurisdictions: {', '.join(na['jurisdictions']) or 'n/a'}",
+        styles["Normal"],
+    ))
+    story.append(Spacer(1, 12))
+
+    # Timeline
+    story.append(Paragraph("Timeline", styles["Heading2"]))
+    for entry in timeline:
+        story.append(Paragraph(f"{entry['timestamp']} — {entry['event']}", styles["Normal"]))
+    story.append(Spacer(1, 12))
+
+    # Legal disclaimer
+    story.append(Paragraph("Legal Disclaimer", styles["Heading2"]))
+    story.append(Paragraph(
+        "This evidence package was generated by an automated intelligence "
+        "system (Surakshak360) and is intended to support, not replace, "
+        "human investigative judgment. Risk scores and entity links are "
+        "probabilistic and must be independently verified before use in "
+        "legal proceedings.",
+        styles["Normal"],
+    ))
+
+    doc.build(story)
+    return buffer.getvalue()
+
+
+def generate_evidence_package(
+    settings: Settings, case_id: str, fuse_result: dict, raw_inputs: dict, fmt: str,
+) -> dict:
+    created_at = fuse_result.get("created_at") or datetime.now(timezone.utc).isoformat()
+    timeline = build_timeline(case_id, raw_inputs, created_at)
+
+    json_payload = {
+        "case_id": case_id,
+        "fuse_result": fuse_result,
+        "raw_inputs": raw_inputs,
+        "timeline": timeline,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    pdf_url = None
+    json_url = None
+
+    if fmt in ("pdf", "both"):
+        pdf_bytes = _pdf_bytes(case_id, fuse_result, raw_inputs, timeline)
+        pdf_url = _save_file(settings, case_id, "pdf", pdf_bytes)
+
+    if fmt in ("json", "both"):
+        json_bytes = json.dumps(json_payload, indent=2, default=str).encode()
+        json_url = _save_file(settings, case_id, "json", json_bytes)
+
+    appendices = ["entity_graph", "legal_disclaimer"]
+    if (raw_inputs.get("scam_result") or {}).get("transcript"):
+        appendices.insert(0, "transcript")
+    if raw_inputs.get("vision_result"):
+        appendices.insert(0, "visual_evidence")
+
+    return {
+        "pdf_url": pdf_url,
+        "json_url": json_url,
+        "timeline": timeline,
+        "appendices": appendices,
+    }

@@ -1,0 +1,9 @@
+[build]
+builder = "dockerfile"
+
+[deploy]
+healthcheckPath = "/health"
+healthcheckTimeout = 30
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 3
+# CPU only — no gpu block, per GROUND_RULES 9.4 (intelligence = NetworkX + rules, CPU).
