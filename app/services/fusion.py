@@ -31,15 +31,40 @@ def fuse_risk(scam_result: dict | None, vision_result: dict | None, user_report:
     vision_result = vision_result or {}
     user_report = user_report or {}
 
-    scam_score = scam_result.get("risk_score", 0) or 0
-    vision_score = vision_result.get("risk_score", 0) if vision_result else 0
+    # scam-intelligence returns 'overall_risk_score' (0-1)
+    # vision returns 'overall_risk_score' (0-1) from general analysis or
+    # 'authenticity_confidence_score' (0-100) from currency analysis
+    scam_score = (
+        scam_result.get("overall_risk_score")
+        or scam_result.get("risk_score")
+        or 0.0
+    )
+
+    vision_score_raw = (
+        vision_result.get("overall_risk_score")
+        or vision_result.get("risk_score")
+        or 0.0
+    )
+    # authenticity_confidence_score is 0-100, normalize to 0-1
+    auth_conf = vision_result.get("authenticity_confidence_score")
+    if auth_conf is not None and vision_score_raw == 0.0:
+        # Low confidence = high risk for currency
+        vision_score_raw = round(1.0 - (float(auth_conf) / 100.0), 4)
+
     user_score = PRIORITY_SCORE.get(user_report.get("priority", "medium"), 0.5)
 
-    return (
+    # Critical digital arrest: if digital_arrest_score is very high, floor the result
+    digital_arrest = scam_result.get("digital_arrest_score", 0.0)
+    base = (
         WEIGHTS["scam_risk"] * scam_score
-        + WEIGHTS["vision_risk"] * vision_score
+        + WEIGHTS["vision_risk"] * vision_score_raw
         + WEIGHTS["user_priority"] * user_score
     )
+    if digital_arrest >= 0.85:
+        base = max(base, 0.65)
+
+    return round(min(base, 1.0), 4)
+
 
 
 def risk_level_for(score: float) -> Literal["low", "medium", "high", "critical"]:

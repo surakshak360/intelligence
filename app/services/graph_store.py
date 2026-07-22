@@ -151,16 +151,32 @@ class GraphStore:
                 {"confidence": (scam_result or {}).get("confidence", 0.0)},
             )
 
-        # Indicator entities from scam-intelligence output (section 6.1 shape:
-        # entities: [{"type": "phone", "value": "...", ...}, ...])
+        # Indicator entities from scam-intelligence output.
+        # Format 1: entities: [{"type": "phone", "value": "...", ...}]  (original spec)
+        # Format 2: identifiers: {"phone_numbers": [...], "upi_ids": [...], ...}  (actual output)
         for ent in (scam_result or {}).get("entities", []):
             label = ENTITY_TYPE_TO_LABEL.get(str(ent.get("type", "")).lower())
-            value = ent.get("value")
+            value = ent.get("value") or ent.get("text")
             if not label or not value:
                 continue
-            self.upsert_node(label, str(value), {k: v for k, v in ent.items() if k != "value"})
+            self.upsert_node(label, str(value), {k: v for k, v in ent.items() if k not in ("value", "text")})
             self.add_edge("Case", case_id, "INVOLVES", label, str(value))
             linked_keys.append(_node_key(label, str(value)))
+
+        # Format 2: identifiers dict from scam-intelligence actual output
+        identifiers = (scam_result or {}).get("identifiers", {})
+        for phone in identifiers.get("phone_numbers", []):
+            self.upsert_node("PhoneNumber", phone, {"source": "scam_intelligence"})
+            self.add_edge("Case", case_id, "INVOLVES", "PhoneNumber", phone)
+            linked_keys.append(_node_key("PhoneNumber", phone))
+        for upi in identifiers.get("upi_ids", []):
+            self.upsert_node("Account", upi, {"type": "upi", "source": "scam_intelligence"})
+            self.add_edge("Case", case_id, "INVOLVES", "Account", upi)
+            linked_keys.append(_node_key("Account", upi))
+        for url in identifiers.get("urls", []):
+            self.upsert_node("Device", url, {"type": "url", "source": "scam_intelligence"})
+            self.add_edge("Case", case_id, "INVOLVES", "Device", url)
+            linked_keys.append(_node_key("Device", url))
 
         # Vision indicator: detected counterfeit class becomes a ScamTemplate too
         detected_class = (vision_result or {}).get("detected_class")

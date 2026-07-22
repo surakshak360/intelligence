@@ -19,8 +19,9 @@ class Settings(BaseSettings):
 
     # Server
     HOST: str = "0.0.0.0"
-    PORT: int = 8000
+    PORT: int = 8003
     LOG_LEVEL: str = "INFO"
+    BACKEND_URL: str = "http://localhost:8000"
 
     # CORS — backend + frontend only talk to this service over private
     # networking in prod, but keep this open for local dev / hackathon demo.

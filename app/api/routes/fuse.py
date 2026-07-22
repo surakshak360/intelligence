@@ -8,6 +8,7 @@ from app.core.schemas import FuseRequest
 from app.models.case_registry import CaseRegistry
 from app.models.job_store import JobStore
 from app.services import evidence, linking, network_analysis, recommendations
+from app.services.backend_client import backend_client
 from app.services.fusion import fuse_risk, risk_level_for
 from app.services.graph_store import GraphStore
 
@@ -26,6 +27,12 @@ async def fuse(
     started = time.perf_counter()
 
     user_report = payload.user_report.model_dump() if payload.user_report else {}
+
+    # Sync historical cases & evidence from backend gateway (8000)
+    try:
+        await backend_client.sync_cases_to_graph(store)
+    except Exception:
+        pass
 
     # 1. Ingest into the graph (creates Case node + links raw indicators).
     store.ingest_case(payload.case_id, payload.scam_result, payload.vision_result, user_report)
