@@ -19,9 +19,18 @@ class BackendClient:
         # Service token header to bypass citizen filtering and receive all cases
         self.headers = {"Authorization": "Bearer service_token"}
 
+    def _build_url(self, path: str) -> str:
+        clean = self.base_url.rstrip("/")
+        if clean.endswith("/v1"):
+            clean = clean[:-3]
+        elif clean.endswith("/api/v1"):
+            clean = clean[:-7]
+        clean_path = path if path.startswith("/") else f"/{path}"
+        return f"{clean}/v1{clean_path}"
+
     async def fetch_all_cases(self, limit: int = 100) -> List[Dict[str, Any]]:
         """Fetch cases list from Backend Gateway API."""
-        url = f"{self.base_url}/api/v1/cases?page_size={limit}"
+        url = self._build_url(f"/cases?page_size={limit}")
         async with httpx.AsyncClient(timeout=10.0) as client:
             try:
                 resp = await client.get(url, headers=self.headers)
@@ -35,14 +44,14 @@ class BackendClient:
                             return inner
                     elif isinstance(data, list):
                         return data
-                logger.warning(f"Backend GET /api/v1/cases returned status {resp.status_code}")
+                logger.warning(f"Backend GET {url} returned status {resp.status_code}")
             except Exception as e:
                 logger.warning(f"Failed to fetch cases from backend API ({self.base_url}): {e}")
         return []
 
     async def fetch_case_evidence(self, case_id: str) -> List[Dict[str, Any]]:
         """Fetch evidence for a specific case from Backend Gateway API."""
-        url = f"{self.base_url}/api/v1/cases/{case_id}/evidence"
+        url = self._build_url(f"/cases/{case_id}/evidence")
         async with httpx.AsyncClient(timeout=10.0) as client:
             try:
                 resp = await client.get(url, headers=self.headers)
